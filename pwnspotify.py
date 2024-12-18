@@ -36,6 +36,7 @@ class PwnSpotify(plugins.Plugin):
         self.scroll_position = 0
         self.last_check = 0
         self.last_retry = 0
+        self.time_left = 0
         self.ready = False
         self.connection_established = False
         self.last_static_time = 0
@@ -122,19 +123,33 @@ class PwnSpotify(plugins.Plugin):
         if not self.ready:
             return
 
-        current_time = time.time()
+        scrolling_text = self.get_scrolling_text(self.last_known_song)
+        ui.set('pwnspotify', scrolling_text)
+
+    def on_ready(self, agent):
+        self.on_internet_available(agent)
+    def on_wait(self, agent, t):
+        self.on_internet_available(agent)
+    def on_sleep(self, agent, t):
+        self.on_internet_available(agent)
+
+    def on_internet_available(self, agent):
+        if not self.ready:
+            return
 
         if not self.connection_established:
             self._try_connection()
             ui.set('pwnspotify', "Connecting to Spotify...")
             return
 
+        current_time = time.time()
+
         if current_time - self.last_check >= self.options['check_interval']:
             self.last_check = current_time
             self.get_current_track()
-            
-        scrolling_text = self.get_scrolling_text(self.last_known_song)
-        ui.set('pwnspotify', scrolling_text)
+        elif (current_time - self.last_check) >= self.time_left/1000 + 2000:
+            self.last_check = current_time
+            self.get_current_track()
 
     def get_tokens(self, auth_code):
         token_url = "https://accounts.spotify.com/api/token"
@@ -245,10 +260,15 @@ class PwnSpotify(plugins.Plugin):
             if response.status_code == 200:
                 if response.text:
                     data = response.json()
+                    logging.debug("Data is %s" % json.dumps(data, indent=4))
                     if data and data.get('item'):
+                        duration = data['item']['duration_ms']
                         track = data['item']['name']
                         artist = data['item']['artists'][0]['name']
                         self.last_known_song = f"♫ {track} - {artist}"
+                        progress = data['progress_ms']
+                        self.time_left = duration - progress
+                        logging.debug("%s %s: %s remaining" % (artist, track, int(self.time_left/1000)))
             elif response.status_code == 401:
                 if self.refresh_access_token():
                     return self.get_current_track()
